@@ -154,7 +154,8 @@ async def check_and_notify(bot: Bot, session_pool):
             if t.break_start:
                 bh, bm = map(int, t.break_start.split(":"))
                 if (bh * 60 + bm) - now_mins == 5:
-                    prefix = "🍏 **Велика перерва**" if t.is_big_break else f"☕️ **Перерва всередині {t.pair_number}-ї пари**"
+                    # prefix = "🍏 **Велика перерва**" if t.is_big_break else f"☕️ **Перерва всередині {t.pair_number}-ї пари**"
+                    prefix = f"☕️ **Перерва всередині {t.pair_number}-ї пари**"
                     msg = f"{prefix} розпочнеться за 5 хв!\n⏱ Час: `{t.break_start} — {t.break_end}`"
 
                     await broadcast_event(bot, session, msg, subj.teacher_id)
