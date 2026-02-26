@@ -1,4 +1,4 @@
-from aiogram import Router, F, types, Bot
+from aiogram import Router, F, types, Bot, html
 from aiogram.fsm.context import FSMContext
 from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,12 +34,13 @@ async def show_users_page(event: types.Message | types.CallbackQuery, session: A
     users = (await session.execute(stmt)).scalars().all()
 
     kb = get_users_list_kb(users, page, total_pages)
-    text = f"👥 **Список користувачів**\nСторінка {page + 1} з {total_pages}:"
+    # Використовуємо html.bold замість зірочок
+    text = f"👥 {html.bold('Список користувачів')}\nСторінка {page + 1} з {total_pages}:"
 
     if isinstance(event, types.Message):
-        await event.answer(text, reply_markup=kb, parse_mode="Markdown")
+        await event.answer(text, reply_markup=kb, parse_mode="HTML")
     else:
-        await event.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+        await event.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
 
 # Навігація по списку
@@ -67,17 +68,17 @@ async def user_details(callback: types.CallbackQuery, callback_data: UserManage,
     target_roles = [r.role.name for r in target.roles]
     mgr_roles = [r.role.name for r in manager.roles]
 
-    text = (f"👤 **Керування:** {target.user_name} {target.user_surname or ''}\n"
-            f"🔗 Юзернейм: @{target.username or '---'}\n"
-            f"🆔 ID: `{target.user_id}`\n"
-            f"🔢 № у журналі: **{target.number or 'не вказано'}**\n"
+    text = (f"👤 {html.bold('Керування:')} {html.quote(target.user_name)} {html.quote(target.user_surname or '')}\n"
+            f"🔗 Юзернейм: @{html.quote(target.username or '---')}\n"
+            f"🆔 ID: {html.code(target.user_id)}\n"
+            f"🔢 № у журналі: {html.bold(target.number or 'не вказано')}\n"
             f"━━━━━━━━━━━━━━━\n"
             f"Оберіть роль для перемикання (✅ = є):")
 
     await callback.message.edit_text(
         text,
         reply_markup=get_user_edit_kb(target.user_id, target_roles, mgr_roles),
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
 
 
