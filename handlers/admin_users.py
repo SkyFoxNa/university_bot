@@ -112,23 +112,21 @@ async def toggle_user_role(callback: types.CallbackQuery, callback_data: UserMan
 
     if existing_link:
         await session.delete(existing_link)
-        action_text = f"❌ Роль **{role_name}** знято."
+        action_text = f"❌ Роль {html.bold(role_name)} знято."  # Виправлено
     else:
         new_link = UserRole(user_id=target.id, role_id=role_obj.id)
         session.add(new_link)
-        action_text = f"✅ Роль **{role_name}** надано."
+        action_text = f"✅ Роль {html.bold(role_name)} надано."  # Виправлено
 
     await session.commit()
-
-    # Рефрешимо об'єкт, щоб SQLAlchemy побачила зміни у відносинах (relationship)
     await session.refresh(target)
 
-    # 4. Оновлюємо меню юзера (використовуємо Telegram ID для відправки)
     try:
         await bot.send_message(
             chat_id=tg_id,
             text=f"{action_text}\nВаше меню оновлено.",
-            reply_markup=get_main_kb(target)
+            reply_markup=get_main_kb(target),
+            parse_mode="HTML"  # Додано
         )
     except Exception:
         pass
