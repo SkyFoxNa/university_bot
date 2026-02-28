@@ -81,6 +81,11 @@ async def cmd_profile(event: types.Message | types.CallbackQuery, session: Async
     # 6. Клавіатура
     builder = InlineKeyboardBuilder()  # Створюємо БІЛДЕР, а не Markup
 
+    # Додаємо кнопку редагування ПІБ першим рядком
+    builder.row(
+        types.InlineKeyboardButton(text="📝 Редагувати ПІБ", callback_data="edit_full_name")
+    )
+
     # Додаємо кнопки через білдер
     builder.row(
         types.InlineKeyboardButton(text="📞 Телефон", callback_data="edit_phone"),
@@ -216,6 +221,7 @@ async def start_editing(callback: types.CallbackQuery, state: FSMContext):
     # field = callback.data.split("_")[1]
     field = callback.data.replace("edit_", "")
     field_names = {
+        "full_name": "Прізвище та Ім'я",  # Нове поле
         "phone": "📞 номер телефону",
         "email": "📨 Email адресу",
         "viber": "🔮 Viber контакт",
@@ -230,10 +236,13 @@ async def start_editing(callback: types.CallbackQuery, state: FSMContext):
         [types.InlineKeyboardButton(text="❌ Скасувати редагування", callback_data="cancel_profile_edit")]
     ])
 
+    prompt_text = f"Введіть новий **{field_names[field]}**:"
+    if field == "full_name":
+        prompt_text += "\n\n⚠️ Будь ласка, введеть через пробіл: *Прізвище Ім'я*"
+
     await callback.message.answer(
-        f"Введіть новий **{field_names[field]}**:\n\n"
-        "👉 Надішліть * - * щоб видалити дані.\n"
-        "👉 Або натисніть кнопку нижче для скасування:",
+        f"{prompt_text}\n\n"
+        "👉 Натисніть кнопку нижче для скасування:",
         reply_markup=kb,
         parse_mode="Markdown"
     )
@@ -250,39 +259,123 @@ async def process_profile_input(message: types.Message, state: FSMContext, sessi
     field = user_data.get("editing_field")
     new_value = message.text.strip()
 
-    # Валідація Email (тільки якщо редагуємо поле email і це не видалення)
-    if field == "email" and new_value != "-":
-        if not EMAIL_REGEX.match(new_value):
-            kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="❌ Скасувати", callback_data="cancel_profile_edit")]
-            ])
+    # Створюємо кнопку скасування для всіх випадків помилок
+    cancel_kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="❌ Скасувати редагування", callback_data="cancel_profile_edit")]
+    ])
+
+    # --- 1. ЛОГІКА ДЛЯ ПІБ (full_name) ---
+    if field == "full_name":
+        # Заборона видалення ПІБ через "-"
+        if new_value == "-":
             return await message.answer(
-                "❌ **Помилка у форматі Email!**\n"
-                "Приклад: `student@univ.edu.ua`\n"
-                "Спробуйте ще раз або натисніть скасувати:",
-                reply_markup=kb,
+                "⚠️ **ПІБ не можна видалити!**\n\n"
+                "Будь ласка, введіть ваші справжні Прізвище та Ім'я через пробіл "
+                "або натисніть кнопку скасування:",
+                reply_markup=cancel_kb,
                 parse_mode="Markdown"
             )
 
-    # Обробка видалення через "-"
-    if new_value == "-":
-        new_value = None
+        parts = new_value.split(maxsplit=1)
+        # Перевірка на кількість слів (має бути мінімум два)
+        if len(parts) < 2:
+            return await message.answer(
+                "❌ **Помилка у форматі!**\n\n"
+                "Введіть Прізвище та Ім'я через пробіл (наприклад: *Петренко Іван*):",
+                reply_markup=cancel_kb,
+                parse_mode="Markdown"
+            )
 
-    # Оновлення в БД
-    await session.execute(
-        update(User)
-        .where(User.user_id == message.from_user.id)
-        .values({field: new_value})
-    )
+        surname, name = parts[0], parts[1]
+
+        # Оновлюємо ПІБ у базі
+        await session.execute(
+            update(User)
+            .where(User.user_id == message.from_user.id)
+            .values(user_name=name, user_surname=surname)
+        )
+
+    # --- 2. ВАЛІДАЦІЯ EMAIL ---
+    elif field == "email" and new_value != "-":
+        if not EMAIL_REGEX.match(new_value):
+            return await message.answer(
+                "❌ **Помилка у форматі Email!**\n"
+                "Приклад: `student@univ.ua`\n\n"
+                "Спробуйте ще раз або скасуйте дію:",
+                reply_markup=cancel_kb,
+                parse_mode="Markdown"
+            )
+
+        await session.execute(
+            update(User).where(User.user_id == message.from_user.id).values(email=new_value)
+        )
+
+    # --- 3. ЛОГІКА ДЛЯ ВСІХ ІНШИХ ПОЛІВ (phone, viber, telegram_contact) ---
+    else:
+        # Тут видалення через "-" дозволено (телефон або пошту можна приховати)
+        val_to_save = None if new_value == "-" else new_value
+
+        await session.execute(
+            update(User)
+            .where(User.user_id == message.from_user.id)
+            .values({field: val_to_save})
+        )
+
+    # --- ЗАВЕРШЕННЯ ---
     await session.commit()
 
-    await delete_prev_message(message)
+    # Видаляємо повідомлення бота з проханням "Введіть дані"
+    try:
+        await delete_prev_message(message)
+    except:
+        pass
 
     await state.clear()
     await message.answer("✅ Дані успішно оновлено!")
 
-    # Повертаємо профіль
+    # Повертаємо користувача в профіль
     await cmd_profile(message, session)
+
+
+# @router.message(ProfileEdit.waiting_for_input)
+# async def process_profile_input(message: types.Message, state: FSMContext, session: AsyncSession):
+#     user_data = await state.get_data()
+#     field = user_data.get("editing_field")
+#     new_value = message.text.strip()
+#
+#     # Валідація Email (тільки якщо редагуємо поле email і це не видалення)
+#     if field == "email" and new_value != "-":
+#         if not EMAIL_REGEX.match(new_value):
+#             kb = types.InlineKeyboardMarkup(inline_keyboard=[
+#                 [types.InlineKeyboardButton(text="❌ Скасувати", callback_data="cancel_profile_edit")]
+#             ])
+#             return await message.answer(
+#                 "❌ **Помилка у форматі Email!**\n"
+#                 "Приклад: `student@univ.edu.ua`\n"
+#                 "Спробуйте ще раз або натисніть скасувати:",
+#                 reply_markup=kb,
+#                 parse_mode="Markdown"
+#             )
+#
+#     # Обробка видалення через "-"
+#     if new_value == "-":
+#         new_value = None
+#
+#     # Оновлення в БД
+#     await session.execute(
+#         update(User)
+#         .where(User.user_id == message.from_user.id)
+#         .values({field: new_value})
+#     )
+#     await session.commit()
+#
+#     await delete_prev_message(message)
+#
+#     await state.clear()
+#     await message.answer("✅ Дані успішно оновлено!")
+#
+#     # Повертаємо профіль
+#     await cmd_profile(message, session)
 
 
 # хендлер для кнопки скасування

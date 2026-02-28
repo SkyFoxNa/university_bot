@@ -16075,3 +16075,18 @@ DETAIL:  Failing row contains (null, 2, 4).
 2026-02-25 18:51:28,507 - INFO - root - Бот запускається...
 2026-02-25 18:51:28,507 - INFO - aiogram.dispatcher - Start polling
 2026-02-25 18:51:28,508 - INFO - aiogram.dispatcher - Run polling for bot @TSATU_Dmytro_Motorny_bot id=8202823374 - 'ТДАТУ імені Дмитра Моторного'
+2026-02-27 20:48:09,635 - INFO - apscheduler.scheduler - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-02-27 20:48:09,637 - INFO - apscheduler.scheduler - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-02-27 20:48:09,639 - INFO - apscheduler.scheduler - Added job "send_morning_schedule" to job store "default"
+2026-02-27 20:48:09,639 - INFO - apscheduler.scheduler - Added job "check_and_notify" to job store "default"
+2026-02-27 20:48:09,639 - INFO - apscheduler.scheduler - Scheduler started
+2026-02-27 20:48:09,639 - INFO - root - APScheduler успішно запущено для часового поясу Europe/Kyiv.
+2026-02-27 20:48:09,639 - INFO - root - Бот запускається...
+2026-02-27 20:48:09,640 - INFO - aiogram.dispatcher - Start polling
+2026-02-27 20:48:09,826 - INFO - aiogram.dispatcher - Run polling for bot @TSATU_Dmytro_Motorny_bot id=8202823374 - 'ТДАТУ імені Дмитра Моторного'
+2026-02-27 20:48:12,477 - WARNING - aiogram.dispatcher - Received SIGINT signal
+2026-02-27 20:48:12,478 - INFO - aiogram.dispatcher - Polling stopped for bot @TSATU_Dmytro_Motorny_bot id=8202823374 - 'ТДАТУ імені Дмитра Моторного'
+2026-02-27 20:48:12,478 - INFO - aiogram.dispatcher - Polling stopped
+2026-02-27 20:48:12,730 - INFO - root - Бот запускається...
+2026-02-27 20:48:12,731 - INFO - aiogram.dispatcher - Start polling
+2026-02-27 20:48:12,732 - INFO - aiogram.dispatcher - Run polling for bot @TSATU_Dmytro_Motorny_bot id=8202823374 - 'ТДАТУ імені Дмитра Моторного'

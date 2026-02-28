@@ -8,6 +8,14 @@ from aiogram import Bot
 
 from db.models import User, Role, Lesson, ScheduleChange, ScheduleTime, WeekType, Subject
 
+
+COLOR_TO_EMOJI = {
+    "green": "🟢 (зелений)",
+    "red": "🔴 (червоний)",
+    "common": "⚪️ (загальний)"
+}
+
+
 # Словник для перекладу назв днів
 EN_TO_UA_DAYS = {
     "Monday": "Понеділок", "Tuesday": "Вівторок", "Wednesday": "Середа",
@@ -77,10 +85,24 @@ async def send_morning_schedule(bot: Bot, session_pool):
         times, lessons, changes, color = await get_daily_data(session, today)
         day_name = EN_TO_UA_DAYS.get(today.strftime("%A"), "")
 
-        group_text = f"☀️ **Розклад на сьогодні — {day_name}** ({color})\n\n"
+        # 1. Отримуємо емодзі для кольору тижня
+        color_display = COLOR_TO_EMOJI.get(color, f"({color})")
+
+        group_text = f"☀️ **Розклад на сьогодні — {day_name}** {color_display}\n\n"
+
         for t in times:
+            # --- ОБРОБКА ВЕЛИКОЇ ПЕРЕРВИ (якщо pair_number == None або is_big_break) ---
+            if t.pair_number is None or (hasattr(t, 'is_big_break') and t.is_big_break):
+                group_text += f"🍎 **Велика перерва**\n"
+                group_text += f"⏱ `{t.start_time_1}` – `{t.end_time_2}`\n"
+                group_text += "— — — — — — — — —\n"
+                continue
+
+            # --- ОБРОБКА ЗВИЧАЙНОЇ ПАРИ ---
             subj = None
             prefix = ""
+
+            # Перевіряємо заміну або звичайний розклад
             if t.pair_number in changes:
                 subj = changes[t.pair_number].new_subject
                 prefix = "🔄 [ЗАМІНА] "
@@ -89,11 +111,12 @@ async def send_morning_schedule(bot: Bot, session_pool):
 
             if subj:
                 lecturer = get_teacher_display_name(subj)
-                group_text += f"🔹 **{t.pair_number} пара:** {prefix}{subj.name}\n"
+                group_text += f"📌 **{t.pair_number} пара:** {prefix}{subj.name}\n"
                 group_text += f"👨‍🏫 Викладач: {lecturer}\n"
                 group_text += f"⏱ `{t.start_time_1}` – `{t.end_time_2}` (Пер. {t.break_start}-{t.break_end})\n"
             else:
-                group_text += f"⚪️ **{t.pair_number} пара:** Відсутня\n"
+                group_text += f"❌ **{t.pair_number} пара:** Відсутня\n"
+
             group_text += "— — — — — — — — —\n"
 
         # Розсилка
@@ -110,8 +133,11 @@ async def send_morning_schedule(bot: Bot, session_pool):
         for rector in rectors_res.unique().scalars().all():
             rec_pairs = []
             for t in times:
+                if t.pair_number is None: continue  # Пропускаємо перерви для ректора
+
                 s = changes[t.pair_number].new_subject if t.pair_number in changes else (
                     lessons[t.pair_number].subject if t.pair_number in lessons else None)
+
                 if s and s.teacher_id == rector.id:
                     rec_pairs.append(f"👨‍🏫 **{t.pair_number} пара:** {s.name}\n⏱ `{t.start_time_1}-{t.end_time_2}`")
 
@@ -155,9 +181,9 @@ async def check_and_notify(bot: Bot, session_pool):
             # --- ВНУТРІШНЯ ПЕРЕРВА ---
             if t.break_start:
                 bh, bm = map(int, t.break_start.split(":"))
-                if (bh * 60 + bm) - now_mins == 5:
+                if (bh * 60 + bm) - now_mins == 2:
                     prefix = f"☕️ **Перерва всередині {t.pair_number}-ї пари**"
-                    msg = f"{prefix} розпочнеться за 5 хв!\n⏱ Час: `{t.break_start} — {t.break_end}`"
+                    msg = f"{prefix} розпочнеться за 2 хв!\n⏱ Час: `{t.break_start} — {t.break_end}`"
                     await broadcast_event(bot, session, msg, subj.teacher_id)
 
 
