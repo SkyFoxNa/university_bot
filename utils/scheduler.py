@@ -179,12 +179,12 @@ async def check_and_notify(bot: Bot, session_pool):
                     await broadcast_event(bot, session, msg, subj.teacher_id)
 
             # --- ВНУТРІШНЯ ПЕРЕРВА ---
-            if t.break_start:
-                bh, bm = map(int, t.break_start.split(":"))
-                if (bh * 60 + bm) - now_mins == 2:
-                    prefix = f"☕️ **Перерва всередині {t.pair_number}-ї пари**"
-                    msg = f"{prefix} розпочнеться за 2 хв!\n⏱ Час: `{t.break_start} — {t.break_end}`"
-                    await broadcast_event(bot, session, msg, subj.teacher_id)
+            # if t.break_start:
+            #     bh, bm = map(int, t.break_start.split(":"))
+            #     if (bh * 60 + bm) - now_mins == 2:
+            #         prefix = f"☕️ **Перерва всередині {t.pair_number}-ї пари**"
+            #         msg = f"{prefix} розпочнеться за 2 хв!\n⏱ Час: `{t.break_start} — {t.break_end}`"
+            #         await broadcast_event(bot, session, msg, subj.teacher_id)
 
 
 async def broadcast_event(bot: Bot, session, text: str, teacher_db_id: int = None):
