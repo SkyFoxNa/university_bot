@@ -21,13 +21,3 @@ if raw_db_url.startswith("sqlite"):
     DATABASE_URL = f"sqlite+aiosqlite:///{BASE_DIR / db_file}"
 else:
     DATABASE_URL = raw_db_url
-
-
-# import os
-# from dotenv import load_dotenv
-#
-# load_dotenv()
-#
-# BOT_TOKEN = os.getenv("BOT_TOKEN")
-# DATABASE_URL = os.getenv("DATABASE_URL")
-# GROUP_ID = int(os.getenv("GROUP_ID"))
