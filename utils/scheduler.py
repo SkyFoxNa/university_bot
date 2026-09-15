@@ -145,33 +145,33 @@ async def send_morning_schedule(bot: Bot, session_pool):
 
         times, lessons, changes, color = await get_daily_data(session, today)
         day_name_ua = EN_TO_UA_DAYS.get(today.strftime("%A"), "")
-
-        # 1. СИНХРОНІЗАЦІЯ З GOOGLE SHEETS
-        remote_data = await get_remote_schedule_for_day(day_name_ua)
-        updates_log = []
-
-        if remote_data:
-            for item in remote_data:
-                pair_num = item['pair']
-                current_lesson = changes.get(pair_num) or lessons.get(pair_num)
-
-                if current_lesson and item['link']:
-                    subj = current_lesson.new_subject if hasattr(current_lesson,
-                                                                 'new_subject') else current_lesson.subject
-
-                    if normalize_name(subj.name) == item['norm_name']:
-                        if subj.zoom_link != item['link']:
-                            old_link = subj.zoom_link
-                            await session.execute(
-                                update(Subject).where(Subject.id == subj.id).values(zoom_link=item['link'])
-                            )
-                            updates_log.append({
-                                "pair": pair_num,
-                                "subj": subj.name,
-                                "old": old_link,
-                                "new": item['link']
-                            })
-            await session.commit()
+    #
+    #     # 1. СИНХРОНІЗАЦІЯ З GOOGLE SHEETS
+    #     remote_data = await get_remote_schedule_for_day(day_name_ua)
+    #     updates_log = []
+    #
+    #     if remote_data:
+    #         for item in remote_data:
+    #             pair_num = item['pair']
+    #             current_lesson = changes.get(pair_num) or lessons.get(pair_num)
+    #
+    #             if current_lesson and item['link']:
+    #                 subj = current_lesson.new_subject if hasattr(current_lesson,
+    #                                                              'new_subject') else current_lesson.subject
+    #
+    #                 if normalize_name(subj.name) == item['norm_name']:
+    #                     if subj.zoom_link != item['link']:
+    #                         old_link = subj.zoom_link
+    #                         await session.execute(
+    #                             update(Subject).where(Subject.id == subj.id).values(zoom_link=item['link'])
+    #                         )
+    #                         updates_log.append({
+    #                             "pair": pair_num,
+    #                             "subj": subj.name,
+    #                             "old": old_link,
+    #                             "new": item['link']
+    #                         })
+    #         await session.commit()
 
         # 2. ФОРМУВАННЯ ПОВІДОМЛЕННЯ
         color_display = COLOR_TO_EMOJI.get(color, f"({color})")
@@ -184,26 +184,36 @@ async def send_morning_schedule(bot: Bot, session_pool):
 
             subj = None
             prefix = ""
+            # Отримуємо основний урок з розкладу для цієї пари (якщо є)
+            main_lesson = lessons.get(t.pair_number)
+
             if t.pair_number in changes:
                 subj = changes[t.pair_number].new_subject
                 prefix = "🔄 [ЗАМІНА] "
-            elif t.pair_number in lessons:
-                subj = lessons[t.pair_number].subject
+                # Якщо є інформація про тип заняття у зв'язаному уроці:
+                if main_lesson and main_lesson.lesson_type:
+                    lesson_type_str = f" ({main_lesson.lesson_type})"
+            elif main_lesson:
+                subj = main_lesson.subject
+                if main_lesson.lesson_type:
+                    lesson_type_str = f" ({main_lesson.lesson_type})"
 
             if subj:
                 lecturer = get_teacher_display_name(subj)
+                # Додаємо lesson_type_str поруч із назвою предмета
                 group_text += f"📌 **{t.pair_number} пара:** {prefix}{subj.name}\n"
+                group_text += f"📌 ** {lesson_type_str}\n"
                 group_text += f"👨‍🏫 Викладач: {lecturer}\n"
                 group_text += f"⏱ `{t.start_time_1}` – `{t.end_time_2}`\n"
             else:
                 group_text += f"❌ **{t.pair_number} пара:** Відсутня\n"
             group_text += "— — — — — — — — —\n"
 
-        # Додаємо інформацію про оновлені лінки
-        if updates_log:
-            group_text += "\n⚠️ **Увага! Змінено посилання:**\n"
-            for upd in updates_log:
-                group_text += f"• {upd['pair']} пара: [НОВЕ]({upd['new']}) (було: {upd['old'] if upd['old'] else '—'})\n"
+        # # Додаємо інформацію про оновлені лінки
+        # if updates_log:
+        #     group_text += "\n⚠️ **Увага! Змінено посилання:**\n"
+        #     for upd in updates_log:
+        #         group_text += f"• {upd['pair']} пара: [НОВЕ]({upd['new']}) (було: {upd['old'] if upd['old'] else '—'})\n"
 
         # 3. РОЗСИЛКА СТУДЕНТАМ
         users_res = await session.execute(
@@ -226,16 +236,24 @@ async def check_and_notify(bot: Bot, session_pool):
 
         for t in times:
             if not t.pair_number: continue
+
+            main_lesson = lessons.get(t.pair_number)
             subj = changes[t.pair_number].new_subject if t.pair_number in changes else (
-                lessons[t.pair_number].subject if t.pair_number in lessons else None)
+                main_lesson.subject if main_lesson else None)
 
             if not subj: continue
+
+            # Отримуємо тип заняття (якщо він вказаний)
+            lesson_type_str = f" ({main_lesson.lesson_type})" if (main_lesson and main_lesson.lesson_type) else ""
 
             if t.start_time_1:
                 sh, sm = map(int, t.start_time_1.split(":"))
                 if (sh * 60 + sm) - now_mins == 5:
                     lecturer = get_teacher_display_name(subj)
+
+                    # Додаємо {lesson_type_str} після назви предмета
                     msg = (f"🔔 **{t.pair_number} ПАРА: {subj.name}**\n"
+                           f"📌 ** {lesson_type_str}**\n"
                            f"👨‍🏫 Лектор: **{lecturer}**\n\n"
                            f"⏱ Початок: `{t.start_time_1}`\n"
                            f"🔗 [Увійти в Zoom]({subj.zoom_link})\n"
