@@ -28,10 +28,15 @@ EN_TO_UA_DAYS = {
     "Thursday": "Четвер", "Friday": "П'ятниця", "Saturday": "Субота", "Sunday": "Неділя"
 }
 
+SUBGROUP_MAP = {
+    "all": "👥 Вся група",
+    "sub1": "1️⃣ 1 підгрупа",
+    "sub2": "2️⃣ 2 підгрупа"
+}
+
 # URL Google Таблиці (експорт в XLSX)
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1UKq4fqAUUostw9TKjzZcmv8Tl4gqgJc9KHorvUyzGKQ/export?format=xlsx"
 
-# Словник для нормалізації назв
 HARD_REPLACEMENTS = {
     "твсгп": "технологія виробництва сільськогосподарської продукції",
 }
@@ -40,17 +45,14 @@ HARD_REPLACEMENTS = {
 # --- ДОПОМІЖНІ ФУНКЦІЇ ПАРСИНГУ ---
 
 def normalize_name(name: str) -> str:
-    """Приведення назви до єдиного формату для порівняння"""
     if not name or str(name) == "nan": return ""
     name = str(name).strip().lower()
     if name in HARD_REPLACEMENTS:
         name = HARD_REPLACEMENTS[name]
-    # Видаляємо все в дужках (л), (пр) тощо
     return re.sub(r'\s*\(.*\)\s*', '', name).strip()
 
 
 async def get_remote_schedule_for_day(target_day_ua: str):
-    """Завантаження та парсинг таблиці на конкретний день"""
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(GOOGLE_SHEET_URL) as resp:
@@ -118,13 +120,22 @@ async def get_daily_data(session, target_date: date):
     times = times_res.scalars().all()
 
     day_name_en = target_date.strftime("%A")
+
+    # Витягуємо всі уроки на день (усі підгрупи)
     lessons_res = await session.execute(
         select(Lesson).where(
             Lesson.day_of_week == day_name_en,
             Lesson.week_type.in_([active_color, "common"])
         ).options(selectinload(Lesson.subject).selectinload(Subject.teacher_user))
+        .order_by(Lesson.lesson_number)
     )
-    lessons_map = {l.lesson_number: l for l in lessons_res.scalars().all()}
+
+    # Групуємо уроки у словник за номером пари: {1: [lesson1, lesson2], 2: [lesson3]}
+    lessons_map = {}
+    for l in lessons_res.scalars().all():
+        if l.lesson_number not in lessons_map:
+            lessons_map[l.lesson_number] = []
+        lessons_map[l.lesson_number].append(l)
 
     changes_res = await session.execute(
         select(ScheduleChange).where(ScheduleChange.change_date == target_date)
@@ -138,42 +149,14 @@ async def get_daily_data(session, target_date: date):
 # --- ГОЛОВНІ ЗАВДАННЯ ---
 
 async def send_morning_schedule(bot: Bot, session_pool):
-    """Ранкова розсилка з попередньою перевіркою Google Таблиці"""
+    """Ранкова розсилка з підтримкою підгруп"""
     async with session_pool() as session:
         today = datetime.now(UA_TZ).date()
         if today.weekday() > 4: return  # Вихідні
 
-        times, lessons, changes, color = await get_daily_data(session, today)
+        times, lessons_map, changes_map, color = await get_daily_data(session, today)
         day_name_ua = EN_TO_UA_DAYS.get(today.strftime("%A"), "")
-    #
-    #     # 1. СИНХРОНІЗАЦІЯ З GOOGLE SHEETS
-    #     remote_data = await get_remote_schedule_for_day(day_name_ua)
-    #     updates_log = []
-    #
-    #     if remote_data:
-    #         for item in remote_data:
-    #             pair_num = item['pair']
-    #             current_lesson = changes.get(pair_num) or lessons.get(pair_num)
-    #
-    #             if current_lesson and item['link']:
-    #                 subj = current_lesson.new_subject if hasattr(current_lesson,
-    #                                                              'new_subject') else current_lesson.subject
-    #
-    #                 if normalize_name(subj.name) == item['norm_name']:
-    #                     if subj.zoom_link != item['link']:
-    #                         old_link = subj.zoom_link
-    #                         await session.execute(
-    #                             update(Subject).where(Subject.id == subj.id).values(zoom_link=item['link'])
-    #                         )
-    #                         updates_log.append({
-    #                             "pair": pair_num,
-    #                             "subj": subj.name,
-    #                             "old": old_link,
-    #                             "new": item['link']
-    #                         })
-    #         await session.commit()
 
-        # 2. ФОРМУВАННЯ ПОВІДОМЛЕННЯ
         color_display = COLOR_TO_EMOJI.get(color, f"({color})")
         group_text = f"☀️ **Розклад на сьогодні — {day_name_ua}** {color_display}\n\n"
 
@@ -182,40 +165,41 @@ async def send_morning_schedule(bot: Bot, session_pool):
                 group_text += f"🍎 **Велика перерва**\n⏱ `{t.start_time_1}` – `{t.end_time_2}`\n— — — — — — — — —\n"
                 continue
 
-            subj = None
-            prefix = ""
-            # Отримуємо основний урок з розкладу для цієї пари (якщо є)
-            main_lesson = lessons.get(t.pair_number)
+            pair_num = t.pair_number
+            group_text += f"📌 **{pair_num} пара:**\n"
 
-            if t.pair_number in changes:
-                subj = changes[t.pair_number].new_subject
-                prefix = "🔄 [ЗАМІНА] "
-                # Якщо є інформація про тип заняття у зв'язаному уроці:
-                if main_lesson and main_lesson.lesson_type:
-                    lesson_type_str = f" ({main_lesson.lesson_type})"
-            elif main_lesson:
-                subj = main_lesson.subject
-                if main_lesson.lesson_type:
-                    lesson_type_str = f" ({main_lesson.lesson_type})"
-
-            if subj:
+            # Перевіряємо заміни для цієї пари
+            if pair_num in changes_map:
+                change = changes_map[pair_num]
+                subj = change.new_subject
                 lecturer = get_teacher_display_name(subj)
-                # Додаємо lesson_type_str поруч із назвою предмета
-                group_text += f"📌 **{t.pair_number} пара:** {prefix}{subj.name}\n"
-                group_text += f"📌 ** {lesson_type_str}\n"
-                group_text += f"👨‍🏫 Викладач: {lecturer}\n"
-                group_text += f"⏱ `{t.start_time_1}` – `{t.end_time_2}`\n"
+                group_text += f"  🔄 **[ЗАМІНА]** {subj.name}\n"
+                group_text += f"  👨‍🏫 {lecturer}\n"
+                if subj.zoom_link:
+                    group_text += f"  🔗 [Zoom]({subj.zoom_link}) "
+                    if subj.zoom_id: group_text += f"🆔 `{subj.zoom_id}`"
+                    group_text += "\n"
+            elif pair_num in lessons_map:
+                # Виводимо всі заняття (підгрупи) для цієї пари
+                for lesson in lessons_map[pair_num]:
+                    subj = lesson.subject
+                    sub_label = f" [{SUBGROUP_MAP.get(lesson.subgroup, '')}]" if lesson.subgroup != "all" else ""
+                    type_str = f" ({lesson.lesson_type})" if lesson.lesson_type else ""
+                    lecturer = get_teacher_display_name(subj)
+
+                    group_text += f"  • **{subj.name}**{type_str}{sub_label}\n"
+                    group_text += f"    👨‍🏫 {lecturer}\n"
+                    if subj.zoom_link:
+                        group_text += f"    🔗 [Zoom]({subj.zoom_link}) "
+                        if subj.zoom_id: group_text += f"🆔 `{subj.zoom_id}`"
+                        group_text += "\n"
             else:
-                group_text += f"❌ **{t.pair_number} пара:** Відсутня\n"
+                group_text += "  _відсутня_\n"
+
+            group_text += f"  ⏱ `{t.start_time_1}` – `{t.end_time_2}`\n"
             group_text += "— — — — — — — — —\n"
 
-        # # Додаємо інформацію про оновлені лінки
-        # if updates_log:
-        #     group_text += "\n⚠️ **Увага! Змінено посилання:**\n"
-        #     for upd in updates_log:
-        #         group_text += f"• {upd['pair']} пара: [НОВЕ]({upd['new']}) (було: {upd['old'] if upd['old'] else '—'})\n"
-
-        # 3. РОЗСИЛКА СТУДЕНТАМ
+        # Розсилка студентам та старостам
         users_res = await session.execute(
             select(User).join(User.roles).join(Role).where(Role.name.in_(["student", "headman"]))
         )
@@ -227,46 +211,53 @@ async def send_morning_schedule(bot: Bot, session_pool):
 
 
 async def check_and_notify(bot: Bot, session_pool):
-    """Щохвилинна перевірка початку пар"""
+    """Щохвилинна перевірка початку пар (з 08:00 по 20:00)"""
     now_ua = datetime.now(UA_TZ)
+
+    if not (8 <= now_ua.hour < 20):
+        return
+
     now_mins = now_ua.hour * 60 + now_ua.minute
 
     async with session_pool() as session:
-        times, lessons, changes, _ = await get_daily_data(session, now_ua.date())
+        times, lessons_map, changes_map, _ = await get_daily_data(session, now_ua.date())
 
         for t in times:
             if not t.pair_number: continue
+            pair_num = t.pair_number
 
-            main_lesson = lessons.get(t.pair_number)
-            subj = changes[t.pair_number].new_subject if t.pair_number in changes else (
-                main_lesson.subject if main_lesson else None)
+            subjects_to_notify = []
+            if pair_num in changes_map:
+                subjects_to_notify.append(changes_map[pair_num].new_subject)
+            elif pair_num in lessons_map:
+                for lesson in lessons_map[pair_num]:
+                    subjects_to_notify.append(lesson.subject)
 
-            if not subj: continue
-
-            # Отримуємо тип заняття (якщо він вказаний)
-            lesson_type_str = f" ({main_lesson.lesson_type})" if (main_lesson and main_lesson.lesson_type) else ""
+            if not subjects_to_notify: continue
 
             if t.start_time_1:
                 sh, sm = map(int, t.start_time_1.split(":"))
                 if (sh * 60 + sm) - now_mins == 5:
-                    lecturer = get_teacher_display_name(subj)
+                    for subj in subjects_to_notify:
+                        lecturer = get_teacher_display_name(subj)
 
-                    # Додаємо {lesson_type_str} після назви предмета
-                    msg = (f"🔔 **{t.pair_number} ПАРА: {subj.name}**\n"
-                           f"📌 ** {lesson_type_str}**\n"
-                           f"👨‍🏫 Лектор: **{lecturer}**\n\n"
-                           f"⏱ Початок: `{t.start_time_1}`\n"
-                           f"🔗 [Увійти в Zoom]({subj.zoom_link})\n"
-                           f"🆔 `{subj.zoom_id or '-'}` | 🔑 `{subj.zoom_password or '-'}`")
+                        # ✨ Оновлене повідомлення з часом початку і кінця
+                        msg = (f"🔔 **Нагадування: {pair_num} ПАРА**\n"
+                               f"📚 **{subj.name}**\n"
+                               f"👨‍🏫 Лектор: **{lecturer}**\n\n"
+                               f"⏱️ Початок: `{t.start_time_1}`\n"
+                               f"🏁 Кінець: `{t.end_time_2}`\n"
+                               f"🔗 [Увійти в Zoom]({subj.zoom_link})\n"
+                               f"🆔 `{subj.zoom_id or '-'}` | 🔑 `{subj.zoom_password or '-'}`")
 
-                    # Універсальна розсилка
-                    std_res = await session.execute(
-                        select(User).join(User.roles).join(Role).where(Role.name.in_(["student", "headman"])))
-                    for u in std_res.unique().scalars().all():
-                        try:
-                            await bot.send_message(u.user_id, msg, parse_mode="Markdown", disable_web_page_preview=True)
-                        except:
-                            continue
+                        std_res = await session.execute(
+                            select(User).join(User.roles).join(Role).where(Role.name.in_(["student", "headman"])))
+                        for u in std_res.unique().scalars().all():
+                            try:
+                                await bot.send_message(u.user_id, msg, parse_mode="Markdown",
+                                                       disable_web_page_preview=True)
+                            except:
+                                continue
 
 
 # --- Зміна кольору розкладу ---
@@ -274,7 +265,6 @@ async def check_and_notify(bot: Bot, session_pool):
 async def auto_toggle_week(bot: Bot, session_pool):
     """Автоматичне перемикання кольору тижня (Понеділок 08:25)"""
     async with session_pool() as session:
-        # 1. Отримуємо поточний активний колір
         res = await session.execute(select(WeekType).where(WeekType.is_active == True))
         current = res.scalar_one_or_none()
 
@@ -282,45 +272,29 @@ async def auto_toggle_week(bot: Bot, session_pool):
             logging.error("Авто-перемикання: Активний тиждень не знайдено в БД!")
             return
 
-        # 2. Визначаємо новий колір
         new_color = "red" if current.name == "green" else "green"
 
-        # 3. Оновлюємо БД
         await session.execute(update(WeekType).values(is_active=False))
-        await session.execute(update(WeekType).where(WeekType.name == new_color).values(is_active=True))
+        await session.execute(update(WeekType.where(WeekType.name == new_color).values(is_active=True)))
         await session.commit()
 
         logging.info(f"Автоматично змінено колір тижня на: {new_color}")
-
-        # 4. Викликаємо масову розсилку (ту саму, що використовується при ручному перемиканні)
-        # Примітка: Функція broadcast_week_change має бути доступна для імпорту
-        from handlers.settings import broadcast_week_change
         await broadcast_week_change(bot, session, new_color)
 
-
-# def setup_scheduler(bot: Bot, session_pool):
-#     scheduler = AsyncIOScheduler(timezone=UA_TZ)
-#     scheduler.add_job(send_morning_schedule, "cron", hour=8, minute=30, args=[bot, session_pool])
-#     scheduler.add_job(check_and_notify, "interval", minutes=1, args=[bot, session_pool])
-#     scheduler.add_job(auto_toggle_week, "cron", day_of_week='mon', hour=8, minute=25, args=[bot, session_pool])
-#     scheduler.start()
-#     logging.info("🚀 APScheduler запущено.")
-#
 
 # --- ІНІЦІАЛІЗАЦІЯ ---
 
 def setup_scheduler(bot: Bot, session_pool):
-    """Запуск шедулера"""
+    """Запуск шедулера з обмеженням часу моніторингу"""
     scheduler = AsyncIOScheduler(timezone=UA_TZ)
 
     # 1. Ранкова розсилка розкладу (щодня о 08:30)
     scheduler.add_job(send_morning_schedule, "cron", hour=8, minute=30, args=[bot, session_pool])
 
-    # 2. Щохвилинний моніторинг (дзвінки, Zoom)
+    # 2. Щохвилинний моніторинг (працюватиме щохвилини, але в середині функції стоїть перевірка годин 08:00–20:00)
     scheduler.add_job(check_and_notify, "interval", minutes=1, args=[bot, session_pool])
 
     # 3. АВТОМАТИЧНЕ ПЕРЕМИКАННЯ КОЛЬОРУ (щопонеділка о 08:25)
-    # day_of_week=0 означає понеділок (або 'mon')
     scheduler.add_job(
         auto_toggle_week,
         "cron",
@@ -331,4 +305,4 @@ def setup_scheduler(bot: Bot, session_pool):
     )
 
     scheduler.start()
-    logging.info("APScheduler успішно запущено для часового поясу Europe/Kyiv.")
+    logging.info("🚀 APScheduler успішно запущено (моніторинг активний з 08:00 по 20:00).")

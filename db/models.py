@@ -106,6 +106,7 @@ class Lesson(Base):
     week_type: Mapped[str] = mapped_column(String(20))  # 'green', 'red', 'common'
     lesson_type: Mapped[str] = mapped_column(String(50), nullable=True)
 
+    subgroup: Mapped[str] = mapped_column(String(20), default="all", nullable=False)
     subject: Mapped["Subject"] = relationship("Subject", back_populates="lessons")
 
 
