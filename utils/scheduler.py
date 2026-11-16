@@ -223,40 +223,56 @@ async def check_and_notify(bot: Bot, session_pool):
         times, lessons_map, changes_map, _ = await get_daily_data(session, now_ua.date())
 
         for t in times:
-            if not t.pair_number: continue
+            if not t.pair_number:
+                continue
             pair_num = t.pair_number
 
-            subjects_to_notify = []
+            # Зберігаємо кортежі: (об'єкт Subject, тип пари, підгрупа)
+            items_to_notify = []
             if pair_num in changes_map:
-                subjects_to_notify.append(changes_map[pair_num].new_subject)
+                change = changes_map[pair_num]
+                items_to_notify.append((change.new_subject, change.new_type, "all"))
             elif pair_num in lessons_map:
                 for lesson in lessons_map[pair_num]:
-                    subjects_to_notify.append(lesson.subject)
+                    items_to_notify.append((lesson.subject, lesson.lesson_type, lesson.subgroup))
 
-            if not subjects_to_notify: continue
+            if not items_to_notify:
+                continue
 
             if t.start_time_1:
                 sh, sm = map(int, t.start_time_1.split(":"))
                 if (sh * 60 + sm) - now_mins == 5:
-                    for subj in subjects_to_notify:
+                    # Отримуємо список користувачів один раз на цикл
+                    std_res = await session.execute(
+                        select(User).join(User.roles).join(Role).where(Role.name.in_(["student", "headman"]))
+                    )
+                    users = std_res.unique().scalars().all()
+
+                    for subj, l_type, subgroup in items_to_notify:
                         lecturer = get_teacher_display_name(subj)
+                        type_line = f"📌 **Тип:** {l_type}\n" if l_type else ""
+                        sub_label = f" [{SUBGROUP_MAP.get(subgroup, '')}]" if subgroup and subgroup != "all" else ""
 
-                        # ✨ Оновлене повідомлення з часом початку і кінця
-                        msg = (f"🔔 **Нагадування: {pair_num} ПАРА**\n"
-                               f"📚 **{subj.name}**\n"
-                               f"👨‍🏫 Лектор: **{lecturer}**\n\n"
-                               f"⏱️ Початок: `{t.start_time_1}`\n"
-                               f"🏁 Кінець: `{t.end_time_2}`\n"
-                               f"🔗 [Увійти в Zoom]({subj.zoom_link})\n"
-                               f"🆔 `{subj.zoom_id or '-'}` | 🔑 `{subj.zoom_password or '-'}`")
+                        msg = (
+                            f"🔔 **Нагадування: {pair_num} ПАРА{sub_label}**\n"
+                            f"📚 **{subj.name}**\n"
+                            f"{type_line}"
+                            f"👨‍🏫 Лектор: **{lecturer}**\n\n"
+                            f"⏱️ Початок: `{t.start_time_1}`\n"
+                            f"🏁 Кінець: `{t.end_time_2}`\n"
+                            f"🔗 [Увійти в Zoom]({subj.zoom_link})\n"
+                            f"🆔 `{subj.zoom_id or '-'}` | 🔑 `{subj.zoom_password or '-'}`"
+                        )
 
-                        std_res = await session.execute(
-                            select(User).join(User.roles).join(Role).where(Role.name.in_(["student", "headman"])))
-                        for u in std_res.unique().scalars().all():
+                        for u in users:
                             try:
-                                await bot.send_message(u.user_id, msg, parse_mode="Markdown",
-                                                       disable_web_page_preview=True)
-                            except:
+                                await bot.send_message(
+                                    u.user_id,
+                                    msg,
+                                    parse_mode="Markdown",
+                                    disable_web_page_preview=True
+                                )
+                            except Exception:
                                 continue
 
 
@@ -275,7 +291,7 @@ async def auto_toggle_week(bot: Bot, session_pool):
         new_color = "red" if current.name == "green" else "green"
 
         await session.execute(update(WeekType).values(is_active=False))
-        await session.execute(update(WeekType.where(WeekType.name == new_color).values(is_active=True)))
+        await session.execute(update(WeekType).where(WeekType.name == new_color).values(is_active=True))
         await session.commit()
 
         logging.info(f"Автоматично змінено колір тижня на: {new_color}")
